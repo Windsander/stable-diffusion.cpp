@@ -72,7 +72,7 @@ struct LaunchParams {
     std::string lora_model_dir;
     std::string host = "127.0.0.1";
     schedule_t schedule = DEFAULT;
-    rng_type_t rng_type = CUDA_RNG;
+    rng_type_t rng_type = STD_DEFAULT_RNG; //CUDA_RNG;
 
     sd_type_t wtype = SD_TYPE_COUNT;
     bool vae_tiling = false;
@@ -86,11 +86,14 @@ struct LaunchParams {
 struct RequestParams {
     SDMode mode = TXT2IMG;
     std::string input_id_images_path;
-    std::string input_path;
-    std::string control_image_path;
+    std::string input_image_data;
+    std::string control_image_data;
     std::string prompt;
     std::string negative_prompt;
-  
+    std::string output_format = "png";
+    
+    float output_quality = 0.9;
+
     float min_cfg = 1.0f;
     float cfg_scale = 7.0f;
     float style_ratio = 20.f;
@@ -108,7 +111,7 @@ struct RequestParams {
     float strength = 0.75f;
     float control_strength = 0.9f;
     
-    int64_t seed = 42;
+    int64_t seed = -1;
     bool normalize_input = false;
     bool canny_preprocess = false;
     int upscale_repeats = 1;
@@ -143,8 +146,8 @@ void print_request_params(const RequestParams& params) {
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
     printf("    style ratio:       %.2f\n", params.style_ratio);
     printf("    normalize input image:  %s\n", params.normalize_input ? "true" : "false");
-    printf("    init_img:          %s\n", params.input_path.c_str());
-    printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    input_image_data:   %s\n", params.input_image_data.substr(0, std::min(params.input_image_data.size(), size_t(16))).c_str());
+    printf("    control_image_data: %s\n", params.control_image_data.substr(0, std::min(params.control_image_data.size(), size_t(16))).c_str());
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
@@ -162,6 +165,44 @@ void print_request_params(const RequestParams& params) {
     printf("    motion-bucket-id:  %d\n", params.motion_bucket_id);
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    canny_preprocess:  %s\n", params.canny_preprocess ? "true" : "false");
+    printf("    output_format:     %s\n", params.output_format.c_str());
+    printf("    output_quality:    %.2f\n", params.output_quality);
+}
+
+std::string base64_decode(const std::string &in) {
+    static const auto inverse_lookup = []() {
+        std::array<int, 256> inv;
+        inv.fill(-1);
+        for (size_t i = 0; i < 64; i++) {
+            inv[static_cast<uint8_t>("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i])] = i;
+        }
+        return inv;
+    }();
+
+    std::string out;
+    out.reserve(in.size() * 3 / 4);
+
+    auto val = 0;
+    auto valb = -8;
+
+    for (auto c : in) {
+        if (c == '=') {
+            break;
+        }
+        auto value = inverse_lookup[static_cast<uint8_t>(c)];
+        if (value == -1) {
+            throw std::runtime_error("Invalid base64 character");
+        }
+        val = (val << 6) + value;
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+
+    return out;
 }
 
 class StableDiffusionServer {
@@ -199,17 +240,16 @@ private:
         }
     }
 
-    static void WriteImageToResponse(void* context, void* data, int size) {
-        httplib::Response* res = static_cast<httplib::Response*>(context);
-        res->body.append(static_cast<char*>(data), size);
-    }
+   
 
-    void SendImageResponse(httplib::Response& res, const sd_image_t* image, const std::string& format) {
+    void SendImageResponse(httplib::Response& res, const sd_image_t* image, const std::string& format, float quality = 0.9) {
         res.status = 200;
         res.set_header("Content-Type", "image/" + format);
 
         if (format == "png") {
             stbi_write_png_to_func(WriteImageToResponse, &res, image->width, image->height, image->channel, image->data, 0);
+        } else if (format == "jpg" || format == "jpeg") {
+            stbi_write_jpg_to_func(WriteImageToResponse, &res, image->width, image->height, image->channel, image->data, int(quality * 100));
         } else {
             throw std::runtime_error("Unsupported image format");
         }
@@ -222,7 +262,7 @@ private:
                 print_request_params(params);
                 sd_image_t* result = GenerateImage(params);
                 if (result) {
-                    SendImageResponse(res, result, "png");
+                    SendImageResponse(res, result, params.output_format);
                     //res.set_content((const char*)result->data, result->width * result->height * result->channel, "image/png");
                     free(result->data);
                     free(result);
@@ -298,12 +338,12 @@ private:
             params.batch_count = document["batch_count"].GetInt();
         }
 
-        if (document.HasMember("input_path") && document["input_path"].IsString()) {
-            params.input_path = document["input_path"].GetString();
+        if (document.HasMember("input_image") && document["input_image"].IsString()) {
+            params.input_image_data = document["input_image"].GetString();
         }
 
-        if (document.HasMember("control_image_path") && document["control_image_path"].IsString()) {
-            params.control_image_path = document["control_image_path"].GetString();
+        if (document.HasMember("control_image") && document["control_image"].IsString()) {
+            params.control_image_data = document["control_image"].GetString();
         }
 
         if (document.HasMember("strength") && document["strength"].IsNumber()) {
@@ -325,6 +365,22 @@ private:
         if (document.HasMember("motion_bucket_id") && document["motion_bucket_id"].IsInt()) {
             params.motion_bucket_id = document["motion_bucket_id"].GetInt();
         }
+
+        //format
+        if (document.HasMember("output_format") && document["output_format"].IsString()) {
+            params.output_format = document["output_format"].GetString();
+            if (params.output_format != "png" && params.output_format != "jpg" && params.output_format != "jpeg") {
+                throw std::runtime_error("Invalid output format specified");
+            }
+        }
+
+        //quality
+        if (document.HasMember("output_quality") && document["output_quality"].IsNumber()) {
+            params.output_quality = static_cast<float>(document["output_quality"].GetDouble());
+            if (params.output_quality < 0.0 || params.output_quality > 1.0) {
+                throw std::runtime_error("Invalid output quality specified");
+            }
+        }
         return params;
     }
 
@@ -339,27 +395,28 @@ private:
                             params.style_ratio, params.normalize_input, params.input_id_images_path.c_str());
       } else if (params.mode == IMG2IMG) {
           int width, height, channels;
-          uint8_t* input_image_buffer = stbi_load(params.input_path.c_str(), &width, &height, &channels, 3);
-          if (input_image_buffer) {
-              sd_image_t input_image = {(uint32_t)width, (uint32_t)height, 3, input_image_buffer};
-              result = img2img(m_sdContext, &input_image, params.prompt.c_str(), params.negative_prompt.c_str(),
+
+          sd_image_t* inputImage = DataURIToSDImage(params.input_image_data);
+          if (inputImage) {
+              result = img2img(m_sdContext, inputImage, params.prompt.c_str(), params.negative_prompt.c_str(),
                                 params.clip_skip, params.cfg_scale, params.width, params.height, params.sample_method,
                                 params.sample_steps, params.strength, params.seed, params.batch_count, nullptr,
                                 params.control_strength, params.style_ratio, params.normalize_input, params.input_id_images_path.c_str());
-              free(input_image_buffer);
+              free(inputImage->data);
+              delete inputImage;
           } else {
               throw std::runtime_error("Failed to load input image");
           }
       } else if (params.mode == IMG2VID) {
           int width, height, channels;
-          uint8_t* input_image_buffer = stbi_load(params.input_path.c_str(), &width, &height, &channels, 3);
-          if (input_image_buffer) {
-              sd_image_t input_image = {(uint32_t)width, (uint32_t)height, 3, input_image_buffer};
-              result = img2vid(m_sdContext, &input_image, params.prompt.c_str(), params.negative_prompt.c_str(),
+          sd_image_t* inputImage = DataURIToSDImage(params.input_image_data);
+          if (inputImage) {
+              result = img2vid(m_sdContext, inputImage, params.prompt.c_str(), params.negative_prompt.c_str(),
                                 params.width, params.height, params.min_cfg, params.cfg_scale, params.sample_method,
                                 params.sample_steps, params.strength, params.seed, params.video_frames,
                                 params.motion_bucket_id, params.fps, params.augmentation_level);
-              free(input_image_buffer);
+              free(inputImage->data);
+              delete inputImage;
           } else {
               throw std::runtime_error("Failed to load input image");
           }
@@ -367,11 +424,9 @@ private:
           throw std::runtime_error("Invalid mode specified");
       }
 
-      if (m_launchParams.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
-          int width, height, channels;
-          uint8_t* control_image_buffer = stbi_load(params.control_image_path.c_str(), &width, &height, &channels, 3);
-          if (control_image_buffer) {
-              control_image = new sd_image_t{(uint32_t)width, (uint32_t)height, 3, control_image_buffer};
+      if (m_launchParams.controlnet_path.size() > 0 && params.control_image_data.size() > 0) {
+          control_image = DataURIToSDImage(params.control_image_data);
+          if (control_image) {
               if (params.canny_preprocess) {
                   control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height,
                                                           0.08f, 0.08f, 0.8f, 1.0f, false);
@@ -391,10 +446,39 @@ private:
 
       if (control_image) {
           free(control_image->data);
-          free(control_image);
+          delete control_image;
       }
 
       return result;
+    }
+
+
+     static void WriteImageToResponse(void* context, void* data, int size) {
+        httplib::Response* res = static_cast<httplib::Response*>(context);
+        res->body.append(static_cast<char*>(data), size);
+    }
+
+    sd_image_t* DataURIToSDImage(const std::string& dataURI) {
+        // Extract the base64-encoded data from the data URI
+        size_t commaPos = dataURI.find(',');
+        if (commaPos == std::string::npos) {
+            throw std::runtime_error("Invalid data URI format");
+        }
+        std::string base64Data = dataURI.substr(commaPos + 1);
+
+        // Decode the base64 data
+        std::string decodedData = base64_decode(base64Data);
+
+        // Load the image data into an sd_image_t object
+        int width, height, channels;
+        uint8_t* imageData = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(decodedData.data()),
+                                                  decodedData.size(), &width, &height, &channels, 3);
+        if (!imageData) {
+            throw std::runtime_error("Failed to load image from data URI");
+        }
+
+        sd_image_t* sdImage = new sd_image_t{(uint32_t)width, (uint32_t)height, 3, imageData};
+        return sdImage;
     }
 
 private:
@@ -557,12 +641,11 @@ void parse_launch_args(int argc, const char** argv, LaunchParams& params) {
 int main(int argc, char* argv[]) {
     LaunchParams launchParams;
     parse_launch_args(argc, (const char**)argv, launchParams);
-    print_launch_params(launchParams);
     
     if (launchParams.n_threads <= 0) {
         launchParams.n_threads = get_num_physical_cores();
     }
-
+    print_launch_params(launchParams);
     if (launchParams.model_path.empty()) {
         std::cerr << "Error: Model path is required." << std::endl;
         return 1;
