@@ -14,6 +14,6 @@ COPY . .
 RUN mkdir build && cd build && cmake .. && cmake --build . --config Release
 
 FROM ubuntu:$UBUNTU_VERSION as runtime
-COPY --from=build /sd.cpp/build/bin/server /sd
+COPY --from=build /sd.cpp/build/bin/sd /sd
 
 ENTRYPOINT ["/sd"]
