@@ -214,7 +214,7 @@ public:
 
 class VideoResnetBlock : public IVAEResnetBlock {
 protected:
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, ggml_type wtype) override {
         params["mix_factor"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
         params["time_mixer.mix_factor"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
     }
@@ -544,15 +544,14 @@ public:
 
     struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
-        ggml_tensor * h = z;
         if (!use_video_decoder) {
             auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
-            h                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
+            z                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
         }
         auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
 
         ggml_set_name(z, "bench-start");
-        h = decoder->forward(ctx, z);
+        auto h = decoder->forward(ctx, z);
         ggml_set_name(h, "bench-end");
         return h;
     }

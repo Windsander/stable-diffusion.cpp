@@ -1607,10 +1607,25 @@ public:
             (gglm_ctx_local->engine_meta.engine_sample_steps != sample_steps)){
             int64_t t0 = ggml_time_ms();
             std::vector<float> sigmas = denoiser->schedule->get_sigmas(sample_steps);
+            //size_t t_sigmas = sigmas.size();
+            assert(sigmas.size() == sample_steps + 1);
             size_t t_enc = int64_t(sample_steps * sample_strength);
-            LOG_INFO("target t_enc is %zu steps", t_enc);
+            //lets make sure we are not going to sample more than we have and we are not going to sample less than 1
+            if (t_enc < 1) {
+                t_enc = 1;
+            } else if (t_enc > sample_steps) {
+                t_enc = sample_steps;
+            }
+
+            LOG_INFO("target t_enc is %zu steps, using %zu steps", t_enc, sample_steps);
+            LOG_INFO("sigma scheduler size %zu", sigmas.size());
+            //gglm_ctx_local->engine_meta.env_sigma_scheduler = sigmas;
             gglm_ctx_local->engine_meta.env_sigma_scheduler.clear();
-            gglm_ctx_local->engine_meta.env_sigma_scheduler.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
+            if (t_enc <= sample_steps) {
+                gglm_ctx_local->engine_meta.env_sigma_scheduler.assign(sigmas.begin() + sample_steps - t_enc, sigmas.end());
+            } else {
+                gglm_ctx_local->engine_meta.env_sigma_scheduler.assign(sigmas.begin(), sigmas.end());
+            }
             gglm_ctx_local->engine_meta.engine_sample_steps = sample_steps;
             gglm_ctx_local->engine_meta.engine_merge_start = -1;
             int64_t t1 = ggml_time_ms();
@@ -1985,7 +2000,7 @@ public:
                             int height,
                             sample_method_t sample_method,
                             int sample_steps,
-                            float strength,
+                            float sample_strength,
                             int64_t seed,
                             float pm_style_ratio,
                             bool normalize_input,
@@ -2023,7 +2038,7 @@ public:
             mark_mid_update = config_common(
                 gglm_ctx_params,
                 sample_method,
-                strength,
+                sample_strength,
                 sample_steps,
                 width,
                 height,
@@ -2258,7 +2273,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
             height,
             sample_method,
             sample_steps,
-            sample_strength,
+            1.0f,
             seed,
             style_strength,
             normalize_input,

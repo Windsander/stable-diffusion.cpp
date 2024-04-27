@@ -79,6 +79,8 @@ struct LaunchParams {
     bool control_net_cpu = false;
     bool clip_on_cpu = false;
     bool vae_on_cpu = false;
+    bool verbose = false;
+    bool color = false;
 
     int port = 8080;
 };
@@ -108,13 +110,15 @@ struct RequestParams {
     sample_method_t sample_method = EULER_A;
 
     int sample_steps = 20;
-    float strength = 0.75f;
+    float strength = 1.0f;
     float control_strength = 0.9f;
     
     int64_t seed = -1;
     bool normalize_input = false;
     bool canny_preprocess = false;
     int upscale_repeats = 1;
+
+
 };
 
 void print_launch_params(const LaunchParams& params) {
@@ -130,6 +134,10 @@ void print_launch_params(const LaunchParams& params) {
     printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
     printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
     printf("    lora_model_dir:    %s\n", params.lora_model_dir.c_str());
+
+
+    printf("    verbose:           %s\n", params.verbose ? "true" : "false");
+    printf("    color:             %s\n", params.color ? "true" : "false");
 
     printf("    rng_type:          %s\n", rng_type_to_str[params.rng_type]);
     printf("    schedule:          %s\n", schedule_str[params.schedule]);
@@ -204,6 +212,50 @@ std::string base64_decode(const std::string &in) {
 
     return out;
 }
+
+/* Enables Printing the log level tag in color using ANSI escape codes */
+void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
+    LaunchParams* params = (LaunchParams*)data;
+    int tag_color;
+    const char* level_str;
+    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+
+    if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
+        return;
+    }
+
+    switch (level) {
+        case SD_LOG_DEBUG:
+            tag_color = 37;
+            level_str = "DEBUG";
+            break;
+        case SD_LOG_INFO:
+            tag_color = 34;
+            level_str = "INFO";
+            break;
+        case SD_LOG_WARN:
+            tag_color = 35;
+            level_str = "WARN";
+            break;
+        case SD_LOG_ERROR:
+            tag_color = 31;
+            level_str = "ERROR";
+            break;
+        default: /* Potential future-proofing */
+            tag_color = 33;
+            level_str = "?????";
+            break;
+    }
+
+    if (params->color == true) {
+        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+    } else {
+        fprintf(out_stream, "[%-5s] ", level_str);
+    }
+    fputs(log, out_stream);
+    fflush(out_stream);
+}
+
 
 class StableDiffusionServer {
 public:
@@ -381,6 +433,7 @@ private:
                 throw std::runtime_error("Invalid output quality specified");
             }
         }
+
         return params;
     }
 
@@ -630,6 +683,10 @@ void parse_launch_args(int argc, const char** argv, LaunchParams& params) {
               params.rng_type = (rng_type_t)rng_found;
           }
           i++;
+      } else if (arg == "--verbose") {
+          params.verbose = true;
+      } else if (arg == "--color") {
+          params.color = true;
       } else {
           fprintf(stderr, "Error: --rng requires an argument\n");
       }
@@ -645,7 +702,14 @@ int main(int argc, char* argv[]) {
     if (launchParams.n_threads <= 0) {
         launchParams.n_threads = get_num_physical_cores();
     }
-    print_launch_params(launchParams);
+    sd_set_log_callback(sd_log_cb, (void*)&launchParams);
+
+    if (launchParams.verbose) {
+        print_launch_params(launchParams);
+        printf("%s", sd_get_system_info());
+    }
+
+    
     if (launchParams.model_path.empty()) {
         std::cerr << "Error: Model path is required." << std::endl;
         return 1;

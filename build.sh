@@ -1,4 +1,4 @@
 #!/bin/sh
 
 mkdir build || true
-cd build && cmake .. && cmake --build . --config Release
+cd build && cmake .. -DSD_METAL=ON && cmake --build . --config Release
