@@ -578,6 +578,8 @@ void convert_tensor(void* src,
                     ggml_type dst_type,
                     int nrows,
                     int n_per_row) {
+    //print call with full info
+    //printf("convert_tensor(src=%p, src_type=%s, dst=%p, dst_type=%s, nrows=%d, n_per_row=%d)\n", src, ggml_type_name(src_type), dst, ggml_type_name(dst_type), nrows, n_per_row);
     int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
@@ -622,7 +624,7 @@ void convert_tensor(void* src,
             const float* im = imatrix.data();
             ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, hist, im);
         }
-    }
+    } 
 }
 
 /*================================================= ModelLoader ==================================================*/
@@ -1446,6 +1448,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
             ggml_tensor* dst_tensor = NULL;
 
             success = on_new_tensor_cb(tensor_storage, &dst_tensor);
+            //LOG_DEBUG("process tensor '%s' with type %s", tensor_storage.name.c_str(), ggml_type_name(tensor_storage.type));
             if (!success) {
                 LOG_WARN("process tensor failed: '%s'", tensor_storage.name.c_str());
                 break;

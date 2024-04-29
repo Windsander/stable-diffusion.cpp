@@ -1,3 +1,9 @@
 [submodule "ggml"]
     path = ggml
 	url = https://github.com/ggerganov/ggml.git
+[submodule "examples/server/httplib"]
+	path = examples/server/httplib
+	url = https://github.com/yhirose/cpp-httplib.git
+[submodule "examples/server/rapidjson"]
+	path = examples/server/rapidjson
+	url = https://github.com/Tencent/rapidjson.git
